@@ -1,113 +1,179 @@
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import json
 import os
+import telebot
+import sqlite3
+from dotenv import load_dotenv
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN)
+# تحميل ملف البيئة
+load_dotenv()
 
-ADMIN_ID = 7089231271
-DB_FILE = "users.json"
+bot_token = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
+api_token = os.getenv("API_TOKEN")
 
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {"users": {}, "banned": []}
-    with open(DB_FILE, "r") as f:
-        return json.load(f)
+bot = telebot.TeleBot(bot_token)
 
-def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+admins = [OWNER_ID]
+moderators = [OWNER_ID]  # يمكن إضافة مشرفين لاحقًا من لوحة التحكم
 
-def register_user(user):
-    db = load_db()
-    db["users"][str(user.id)] = {
-        "id": user.id,
-        "username": user.username,
-        "name": user.first_name
-    }
-    save_db(db)
+DEV_BUTTON = InlineKeyboardButton("👨‍💻 المطور", url="https://t.me/ox_u1")
+
+# قاعدة بيانات SQLite
+conn = sqlite3.connect("users.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    search_count INTEGER DEFAULT 0,
+    banned INTEGER DEFAULT 0
+)
+""")
+conn.commit()
+
+def is_admin(user_id): return user_id in admins
+def is_moderator(user_id): return user_id in moderators or is_admin(user_id)
+
+def add_user(user_id, username):
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+    conn.commit()
+
+def increment_search(user_id):
+    cursor.execute("UPDATE users SET search_count = search_count + 1 WHERE user_id=?", (user_id,))
+    conn.commit()
+
+def get_search_count(user_id):
+    cursor.execute("SELECT search_count FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    return result[0] if result else 0
 
 def is_banned(user_id):
-    db = load_db()
-    return user_id in db["banned"]
+    cursor.execute("SELECT banned FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+    return result and result[0] == 1
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    register_user(message.from_user)
+def set_ban(user_id, status):
+    cursor.execute("UPDATE users SET banned=? WHERE user_id=?", (status, user_id))
+    conn.commit()
 
-    if is_banned(message.from_user.id):
-        return bot.send_message(message.chat.id, "🚫 انت محظور")
+# أمر /start
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "NoUsername"
+    add_user(user_id, username)
+    bot.send_message(message.chat.id, "👋 مرحبًا بك في البوت!\nاستخدم /panel لفتح لوحة التحكم.")
 
-    bot.send_message(message.chat.id, "اهلا بك في البوت")
-
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if message.from_user.id != ADMIN_ID:
+# لوحة التحكم الرئيسية
+@bot.message_handler(commands=["panel"])
+def open_panel(message):
+    if not is_moderator(message.from_user.id):
+        bot.reply_to(message, "❌ ليس لديك صلاحية")
         return
+    
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📢 رسالة جماعية", callback_data="menu_broadcast"),
+        InlineKeyboardButton("🔍 بحث مستخدم", callback_data="menu_search"),
+        InlineKeyboardButton("🚫 التشويش", callback_data="menu_ban"),
+        InlineKeyboardButton("👥 إدارة المشرفين", callback_data="menu_mods"),
+        InlineKeyboardButton("⚙️ الإعدادات", callback_data="menu_settings"),
+        InlineKeyboardButton("📊 الإحصائيات", callback_data="show_stats")
+    )
+    bot.send_message(message.chat.id, "📋 لوحة التحكم:", reply_markup=markup)
 
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔍 بحث", callback_data="search"))
-    markup.add(InlineKeyboardButton("🚫 حظر", callback_data="ban"))
-    markup.add(InlineKeyboardButton("✅ فك الحظر", callback_data="unban"))
-    markup.add(InlineKeyboardButton("📊 المستخدمين", callback_data="stats"))
-
-    bot.send_message(message.chat.id, "لوحة التحكم:", reply_markup=markup)
-
+# التعامل مع القوائم الفرعية + الإحصائيات
 @bot.callback_query_handler(func=lambda call: True)
-def callback(call):
-    if call.from_user.id != ADMIN_ID:
+def panel_actions(call):
+    if not is_moderator(call.from_user.id):
+        bot.answer_callback_query(call.id, "❌ لا تملك صلاحية")
         return
+    
+    if call.data == "show_stats":
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM users WHERE banned=1")
+        banned_users = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT SUM(search_count) FROM users")
+        total_searches = cursor.fetchone()[0] or 0
+        
+        stats_text = (
+            f"📊 إحصائيات البوت:\n\n"
+            f"👥 عدد المستخدمين: {total_users}\n"
+            f"🚫 عدد المشوشين: {banned_users}\n"
+            f"🔎 إجمالي الطلبات: {total_searches}"
+        )
+        bot.edit_message_text(stats_text, call.message.chat.id, call.message.message_id)
+    
+    elif call.data == "menu_broadcast":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("✍️ نص فقط", callback_data="broadcast_text"),
+            InlineKeyboardButton("🖼 نص + صورة", callback_data="broadcast_media"),
+            InlineKeyboardButton("⬅️ رجوع", callback_data="back_main")
+        )
+        bot.edit_message_text("📢 خيارات الرسائل الجماعية:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    if call.data == "search":
-        msg = bot.send_message(call.message.chat.id, "ارسل ID او Username:")
-        bot.register_next_step_handler(msg, search_user)
+    elif call.data == "menu_search":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🔍 بالآيدي", callback_data="search_id"),
+            InlineKeyboardButton("🔍 بالمعرف", callback_data="search_username"),
+            InlineKeyboardButton("⬅️ رجوع", callback_data="back_main")
+        )
+        bot.edit_message_text("🔍 خيارات البحث:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif call.data == "ban":
-        msg = bot.send_message(call.message.chat.id, "ارسل ID:")
-        bot.register_next_step_handler(msg, ban_user)
+    elif call.data == "menu_ban":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🚫 تشويش مستخدم", callback_data="ban_user"),
+            InlineKeyboardButton("✅ رفع التشويش", callback_data="unban_user"),
+            InlineKeyboardButton("⬅️ رجوع", callback_data="back_main")
+        )
+        bot.edit_message_text("🚫 إدارة التشويش:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif call.data == "unban":
-        msg = bot.send_message(call.message.chat.id, "ارسل ID:")
-        bot.register_next_step_handler(msg, unban_user)
+    elif call.data == "menu_mods":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("➕ إضافة مشرف", callback_data="add_mod"),
+            InlineKeyboardButton("➖ إزالة مشرف", callback_data="remove_mod"),
+            InlineKeyboardButton("⬅️ رجوع", callback_data="back_main")
+        )
+        bot.edit_message_text("👥 إدارة المشرفين:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif call.data == "stats":
-        db = load_db()
-        bot.send_message(call.message.chat.id, f"عدد المستخدمين: {len(db['users'])}")
+    elif call.data == "menu_settings":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("⚠️ تعديل الحد المجاني", callback_data="set_limit"),
+            InlineKeyboardButton("🌐 تغيير اللغة", callback_data="set_lang"),
+            InlineKeyboardButton("⬅️ رجوع", callback_data="back_main")
+        )
+        bot.edit_message_text("⚙️ الإعدادات العامة:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-def search_user(message):
-    db = load_db()
-    text = message.text.strip()
+    elif call.data == "back_main":
+        open_panel(call.message)
 
-    for user in db["users"].values():
-        if str(user["id"]) == text or (user["username"] and user["username"] == text.replace("@", "")):
-            return bot.send_message(
-                message.chat.id,
-                f"👤 {user['name']}\n🆔 {user['id']}\n📛 @{user['username']}"
-            )
+# مثال على البحث مع نظام الحد المجاني + زر المطور
+@bot.message_handler(func=lambda m: True)
+def handle_search(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "NoUsername"
+    add_user(user_id, username)
 
-    bot.send_message(message.chat.id, "❌ غير موجود")
+    if is_banned(user_id):
+        bot.send_message(message.chat.id, "🚫 حسابك مشوش، لا يمكنك البحث")
+        return
+    
+    increment_search(user_id)
+    count = get_search_count(user_id)
+    
+    if count > 10:
+        bot.send_message(message.chat.id, "⚠️ تجاوزت الحد المجاني (10 مرات)، الإجابات مشوشة")
+        return
+    
+    markup = InlineKeyboardMarkup().add(DEV_BUTTON)
+    bot.send_message(message.chat.id, f"🔎 نتيجة البحث: {message.text}", reply_markup=markup)
 
-def ban_user(message):
-    db = load_db()
-    user_id = int(message.text)
-
-    if user_id not in db["banned"]:
-        db["banned"].append(user_id)
-        save_db(db)
-        bot.send_message(message.chat.id, "✅ تم الحظر")
-    else:
-        bot.send_message(message.chat.id, "⚠️ محظور مسبقا")
-
-def unban_user(message):
-    db = load_db()
-    user_id = int(message.text)
-
-    if user_id in db["banned"]:
-        db["banned"].remove(user_id)
-        save_db(db)
-        bot.send_message(message.chat.id, "✅ تم فك الحظر")
-    else:
-        bot.send_message(message.chat.id, "❌ غير محظور")
-
-bot.infinity_polling()
+bot.polling()
