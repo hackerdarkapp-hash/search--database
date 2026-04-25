@@ -176,4 +176,4 @@ def handle_search(message):
     markup = InlineKeyboardMarkup().add(DEV_BUTTON)
     bot.send_message(message.chat.id, f"🔎 نتيجة البحث: {message.text}", reply_markup=markup)
 
-bot.polling()
+sk-bot.polling(none_stop=True, interval=0, timeout=20)
