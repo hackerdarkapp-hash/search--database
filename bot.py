@@ -12,22 +12,22 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 api_token = os.getenv("API_TOKEN")
 
 import threading
-  from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-  class _Health(BaseHTTPRequestHandler):
-      def do_GET(self):
-          self.send_response(200)
-          self.end_headers()
-          self.wfile.write(b"OK")
-      def log_message(self, *a): pass
+class _Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *a): pass
 
-  def _run_http():
-      port = int(os.getenv("PORT", 8080))
-      HTTPServer(("0.0.0.0", port), _Health).serve_forever()
+def _run_http():
+    port = int(os.getenv("PORT", 8080))
+    HTTPServer(("0.0.0.0", port), _Health).serve_forever()
 
-  threading.Thread(target=_run_http, daemon=True).start()
+threading.Thread(target=_run_http, daemon=True).start()
 
-  bot = telebot.TeleBot(bot_token)
+bot = telebot.TeleBot(bot_token)
 
 admins = [OWNER_ID]
 moderators = [OWNER_ID]  # يمكن إضافة مشرفين لاحقًا من لوحة التحكم
