@@ -17,7 +17,15 @@ bot = telebot.TeleBot(bot_token)
 admins = [OWNER_ID]
 moderators = [OWNER_ID]
 
-DEV_BUTTON = InlineKeyboardButton('👨‍💻 المطور', url='https://t.me/ox_u1')
+DEV_BUTTON = InlineKeyboardButton('👨‍💻 المطور', url='https://t.me/OX_U1')
+
+def dev_markup(extra_buttons=None):
+    markup = InlineKeyboardMarkup()
+    if extra_buttons:
+        for btn in extra_buttons:
+            markup.add(btn)
+    markup.add(DEV_BUTTON)
+    return markup
 
 # HTTP keep-alive server for Render
 class _Health(BaseHTTPRequestHandler):
@@ -33,7 +41,6 @@ def _run_http():
 
 threading.Thread(target=_run_http, daemon=True).start()
 
-# SQLite
 conn = sqlite3.connect('users.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''
@@ -102,14 +109,12 @@ def send_welcome(message):
     user_id = message.from_user.id
     username = message.from_user.username or 'NoUsername'
     add_user(user_id, username)
-    markup = InlineKeyboardMarkup()
-    markup.add(DEV_BUTTON)
-    bot.send_message(message.chat.id, WELCOME_MSG, reply_markup=markup)
+    bot.send_message(message.chat.id, WELCOME_MSG, reply_markup=dev_markup())
 
 @bot.message_handler(commands=['panel'])
 def open_panel(message):
     if not is_moderator(message.from_user.id):
-        bot.reply_to(message, '❌ ليس لديك صلاحية')
+        bot.reply_to(message, '❌ ليس لديك صلاحية', reply_markup=dev_markup())
         return
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -120,6 +125,7 @@ def open_panel(message):
         InlineKeyboardButton('⚙️ الإعدادات', callback_data='menu_settings'),
         InlineKeyboardButton('📊 الإحصائيات', callback_data='show_stats')
     )
+    markup.add(DEV_BUTTON)
     bot.send_message(message.chat.id, '📋 لوحة التحكم:', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -140,7 +146,9 @@ def panel_actions(call):
             f'🚫 عدد المشوشين: {banned_users}\n'
             f'🔎 إجمالي الطلبات: {total_searches}'
         )
-        bot.edit_message_text(stats_text, call.message.chat.id, call.message.message_id)
+        markup = InlineKeyboardMarkup()
+        markup.add(DEV_BUTTON)
+        bot.edit_message_text(stats_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
     elif call.data == 'back_main':
         open_panel(call.message)
 
@@ -150,14 +158,13 @@ def handle_search(message):
     username = message.from_user.username or 'NoUsername'
     add_user(user_id, username)
     if is_banned(user_id):
-        bot.send_message(message.chat.id, '🚫 حسابك مشوش، لا يمكنك البحث')
+        bot.send_message(message.chat.id, '🚫 حسابك مشوش، لا يمكنك البحث', reply_markup=dev_markup())
         return
     increment_search(user_id)
     count = get_search_count(user_id)
     if count > 10:
-        bot.send_message(message.chat.id, '⚠️ تجاوزت الحد المجاني (10 مرات)')
+        bot.send_message(message.chat.id, '⚠️ تجاوزت الحد المجاني (10 مرات)', reply_markup=dev_markup())
         return
-    markup = InlineKeyboardMarkup().add(DEV_BUTTON)
-    bot.send_message(message.chat.id, f'🔎 نتيجة البحث: {message.text}', reply_markup=markup)
+    bot.send_message(message.chat.id, f'🔎 نتيجة البحث: {message.text}', reply_markup=dev_markup())
 
 bot.polling(none_stop=True, interval=0, timeout=20)
