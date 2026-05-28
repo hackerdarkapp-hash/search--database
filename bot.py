@@ -17,17 +17,24 @@ bot = telebot.TeleBot(bot_token)
 admins = [OWNER_ID]
 moderators = [OWNER_ID]
 
-DEV_BUTTON = InlineKeyboardButton('👨‍💻 المطور', url='https://t.me/OX_U1')
+DEV_MSG = (
+    '📩 أرسل رسالتك الآن، وسنقوم بالرد عليك فور استلام الرسالة.\n'
+    '📩 Send your message now, and we will reply as soon as the message is received.\n\n'
+    'نحن هنا لخدمتك وتقديم الدعم على مدار الساعة.\n'
+    'We are here to serve you and provide support 24\/7.\n\n'
+    'لا تتردد في طرح أي استفسار أو طلب، فنحن معك في كل خطوة.\n'
+    'Do not hesitate to ask any questions or requests; we are with you every step of the way.'
+)
 
-def dev_markup(extra_buttons=None):
+DEV_BUTTON = InlineKeyboardButton('👨‍💻 المطور', callback_data='dev_contact')
+CHAT_BUTTON = InlineKeyboardButton('💬 راسل المطور', url='https://t.me/OX_U1')
+
+def dev_markup():
     markup = InlineKeyboardMarkup()
-    if extra_buttons:
-        for btn in extra_buttons:
-            markup.add(btn)
     markup.add(DEV_BUTTON)
     return markup
 
-# HTTP keep-alive server for Render
+# HTTP keep-alive for Render
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -123,12 +130,19 @@ def open_panel(message):
         InlineKeyboardButton('🚫 التشويش', callback_data='menu_ban'),
         InlineKeyboardButton('👥 إدارة المشرفين', callback_data='menu_mods'),
         InlineKeyboardButton('⚙️ الإعدادات', callback_data='menu_settings'),
-        InlineKeyboardButton('📊 الإحصائيات', callback_data='show_stats')
+        InlineKeyboardButton('📊 الإحصائيات', callback_data='show_stats'),
+        DEV_BUTTON
     )
-    markup.add(DEV_BUTTON)
     bot.send_message(message.chat.id, '📋 لوحة التحكم:', reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(func=lambda call: call.data == 'dev_contact')
+def dev_contact(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(CHAT_BUTTON)
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, DEV_MSG, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data != 'dev_contact')
 def panel_actions(call):
     if not is_moderator(call.from_user.id):
         bot.answer_callback_query(call.id, '❌ لا تملك صلاحية')
@@ -151,6 +165,7 @@ def panel_actions(call):
         bot.edit_message_text(stats_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
     elif call.data == 'back_main':
         open_panel(call.message)
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda m: True)
 def handle_search(message):
