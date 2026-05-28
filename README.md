@@ -1,1 +1,0 @@
-Run with BOT_TOKEN env variable
