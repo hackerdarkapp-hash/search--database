@@ -57,16 +57,7 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
-def 
-# ─── Flask (keep-alive for Render.com) ──────────────────────────────────────
-
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def health():
-    return '✅ البوت يعمل'
-
-init_db():
+def init_db():
     conn = get_conn()
     c = conn.cursor()
     c.executescript("""
@@ -1240,6 +1231,12 @@ def callback_query(call: CallbackQuery):
         bot.answer_callback_query(call.id)
 
 # ─── تشغيل ───────────────────────────────────────────────────────────────────
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health():
+    return 'Bot is running'
 
 init_db()
 print("✅ قاعدة البيانات جاهزة")
