@@ -1,147 +1,131 @@
 import os
-import time
-import threading
 import requests
-import telebot
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from dotenv import load_dotenv
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from random import randint
 
-load_dotenv()
+try:
+    import telebot
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+except ModuleNotFoundError:
+    import subprocess
+    subprocess.run(["pip", "install", "pyTelegramBotAPI"], check=True)
+    import telebot
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
-BOT_TOKEN   = os.getenv('BOT_TOKEN')
-OWNER_ID    = int(os.getenv('OWNER_ID'))
-INTELX_KEY  = os.getenv('INTELX_KEY')
-INTELX_BASE = 'https://2.intelx.io'
+url = "https://leakosintapi.com/"
+bot_token = os.environ.get("BOT_TOKEN", "")
+api_token = os.environ.get("API_TOKEN", "")
+lang = "ru"
+limit = 300
 
-bot    = telebot.TeleBot(BOT_TOKEN)
-admins = [OWNER_ID]
+DEVELOPER_TEXT = "👨‍💻 المطور"
+DEVELOPER_URL = "https://t.me/OX_U1"
 
-# ──────────────────────────────────────────────
-#  HTTP keep-alive
-# ──────────────────────────────────────────────
-class _Health(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
-    def log_message(self, *a): pass
+def user_access_test(user_id):
+    return True
 
-def _start_health():
-    port = int(os.getenv('PORT', 8080))
-    for p in [port, 8081, 8082, 8083]:
-        try:
-            HTTPServer(('0.0.0.0', p), _Health).serve_forever()
-            break
-        except OSError:
-            continue
+cash_reports = {}
 
-threading.Thread(target=_start_health, daemon=True).start()
+def generate_report(query, query_id):
+    global cash_reports, url, bot_token, api_token, limit, lang
+    data = {"token": api_token, "request": query.split("\n")[0], "limit": limit, "lang": lang}
+    response = requests.post(url, json=data).json()
+    print(response)
+    if "Error code" in response:
+        print("خطأ:" + response["Error code"])
+        return None
+    cash_reports[str(query_id)] = []
+    for database_name in response["List"].keys():
+        text = [f"<b>{database_name}</b>", ""]
+        text.append(response["List"][database_name]["InfoLeak"] + "\n")
+        if database_name != "No results found":
+            for report_data in response["List"][database_name]["Data"]:
+                for column_name in report_data.keys():
+                    text.append(f"<b>{column_name}</b>:  {report_data[column_name]}")
+                text.append("")
+        text = "\n".join(text)
+        if len(text) > 3500:
+            text = text[:3500] + text[3500:].split("\n")[0] + "\n\nبعض البيانات لا تتناسب مع هذه الرسالة"
+        cash_reports[str(query_id)].append(text)
+    return cash_reports[str(query_id)]
 
-# ──────────────────────────────────────────────
-#  IntelligenceX API
-# ──────────────────────────────────────────────
-def intelx_search(query: str, max_results: int = 10):
-    """Returns (records, error_msg). On success error_msg is None."""
-    if not INTELX_KEY:
-        return [], '⚠️ مفتاح INTELX_KEY غير موجود في الإعدادات.'
+def create_inline_keyboard(query_id, page_id, count_page):
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 3
 
-    headers = {'x-key': INTELX_KEY, 'Content-Type': 'application/json'}
-    body = {
-        'term': query, 'buckets': [], 'lookuplevel': 0,
-        'maxresults': max_results, 'timeout': 0,
-        'datefrom': '', 'dateto': '', 'sort': 4,
-        'media': 0, 'terminate': []
-    }
-    try:
-        r = requests.post(f'{INTELX_BASE}/intelligent/search',
-                          json=body, headers=headers, timeout=15)
-        if r.status_code == 401:
-            return [], '🔑 مفتاح INTELX_KEY غير صالح أو منتهي الصلاحية.\nتحقق من مفتاحك على intelx.io'
-        if r.status_code == 402:
-            return [], '💳 رصيد IntelligenceX منتهٍ. يرجى تجديد الاشتراك.'
-        r.raise_for_status()
-        sid = r.json().get('id')
-        if not sid:
-            return [], '❌ لم يبدأ البحث — لم يُرجع IntelligenceX معرّف جلسة.'
-    except requests.exceptions.Timeout:
-        return [], '⏱ انتهت مهلة الاتصال بـ IntelligenceX. حاول مجدداً.'
-    except requests.exceptions.ConnectionError:
-        return [], '🌐 تعذّر الاتصال بـ IntelligenceX. تحقق من الإنترنت.'
-    except Exception as e:
-        return [], f'❌ خطأ غير متوقع: {e}'
+    if page_id < 0:
+        page_id = count_page
+    elif page_id > count_page - 1:
+        page_id = page_id % count_page
 
-    time.sleep(3)
-    try:
-        r2 = requests.get(f'{INTELX_BASE}/intelligent/search/result',
-                          params={'id': sid, 'limit': max_results, 'offset': 0},
-                          headers=headers, timeout=15)
-        r2.raise_for_status()
-        records = r2.json().get('records', [])
-        return records, None
-    except Exception as e:
-        return [], f'❌ خطأ عند جلب النتائج: {e}'
-
-
-def fmt_results(records: list, query: str) -> str:
-    if not records:
-        return f'❌ لا توجد نتائج للاستعلام:\n<code>{query}</code>'
-
-    lines = [f'🔍 <b>IntelligenceX</b> — {len(records)} نتيجة\n'
-             f'🔎 الاستعلام: <code>{query}</code>\n']
-    for i, rec in enumerate(records[:10], 1):
-        name   = rec.get('name', 'غير معروف')
-        bucket = rec.get('bucket', '—')
-        date   = (rec.get('date') or '')[:10]
-        size   = rec.get('size', 0)
-        lines.append(
-            f'<b>{i}.</b> 📄 <code>{name}</code>\n'
-            f'   🗂 {bucket}  |  📅 {date}  |  📦 {size} B'
+    if count_page > 1:
+        markup.add(
+            InlineKeyboardButton(text="<<", callback_data=f"/page {query_id} {page_id - 1}"),
+            InlineKeyboardButton(text=f"{page_id + 1}/{count_page}", callback_data="page_list"),
+            InlineKeyboardButton(text=">>", callback_data=f"/page {query_id} {page_id + 1}")
         )
-    return '\n'.join(lines)
 
-# ──────────────────────────────────────────────
-#  Keyboards
-# ──────────────────────────────────────────────
-DEV_URL = 'https://t.me/OX_U1'
+    markup.add(
+        InlineKeyboardButton(text=DEVELOPER_TEXT, url=DEVELOPER_URL)
+    )
 
-def main_kb():
-    m = InlineKeyboardMarkup()
-    m.add(InlineKeyboardButton('👨‍💻 تواصل مع المطور', url=DEV_URL))
-    return m
+    return markup
 
-# ──────────────────────────────────────────────
-#  Welcome message
-# ──────────────────────────────────────────────
-WELCOME = (
-    '🔎 <b>بوت OSINT — مدعوم بـ IntelligenceX</b>\n\n'
-    'يبحث هذا البوت في قواعد بيانات مفتوحة المصدر عبر محرك '
-    '<b>IntelligenceX</b>.\n\n'
-    '📌 <b>ما يمكنك البحث عنه:</b>\n'
-    '• 📧 بريد إلكتروني\n'
-    '• 📞 رقم هاتف\n'
-    '• 👤 اسم مستخدم\n'
-    '• 🌐 نطاق / IP\n'
-    '• 🪪 أي معرّف آخر\n\n'
-    '💡 <b>أرسل أي نص للبحث عنه الآن!</b>'
-)
+bot = telebot.TeleBot(bot_token)
 
-# ──────────────────────────────────────────────
-#  Handlers
-# ──────────────────────────────────────────────
-@bot.message_handler(commands=['start'])
-def cmd_start(msg):
-    bot.send_message(msg.chat.id, WELCOME, parse_mode='HTML', reply_markup=main_kb())
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    bot.reply_to(message, "مرحبًا! أنا بوت يمكنه البحث في قواعد البيانات.", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: True)
-def handle_search(msg):
-    query = msg.text.strip()
-    wait  = bot.send_message(msg.chat.id, '⏳ جارٍ البحث في IntelligenceX...')
-    records, err = intelx_search(query)
-    if err:
-        result = err
-    else:
-        result = fmt_results(records, query)
-    bot.edit_message_text(result, msg.chat.id, wait.message_id,
-                          parse_mode='HTML', reply_markup=main_kb())
+@bot.message_handler(func=lambda message: True)
+def echo_message(message):
+    user_id = message.from_user.id
+    if not user_access_test(user_id):
+        bot.send_message(message.chat.id, "ليس لديك حق الوصول إلى الروبوت")
+        return
+    if message.content_type == "text":
+        query_id = randint(0, 9999999)
+        report = generate_report(message.text, query_id)
+        if report is None:
+            bot.reply_to(message, "الروبوت لا يعمل في الوقت الحالي.", parse_mode="Markdown")
+            return
+        markup = create_inline_keyboard(query_id, 0, len(report))
+        try:
+            bot.send_message(message.chat.id, report[0], parse_mode="html", reply_markup=markup)
+        except telebot.apihelper.ApiTelegramException:
+            bot.send_message(message.chat.id, text=report[0].replace("<b>", "").replace("</b>", ""), reply_markup=markup)
 
-# ──────────────────────────────────────────────
-bot.polling(none_stop=True, interval=0, timeout=20)
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call: CallbackQuery):
+    global cash_reports
+    if call.data.startswith("/page "):
+        query_id, page_id = call.data.split(" ")[1:]
+        if query_id not in cash_reports:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text="تم بالفعل حذف نتائج الطلب"
+            )
+        else:
+            report = cash_reports[query_id]
+            markup = create_inline_keyboard(query_id, int(page_id), len(report))
+            try:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=report[int(page_id)],
+                    parse_mode="html",
+                    reply_markup=markup
+                )
+            except telebot.apihelper.ApiTelegramException:
+                bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=report[int(page_id)].replace("<b>", "").replace("</b>", ""),
+                    reply_markup=markup
+                )
+
+while True:
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"خطأ: {e}")
