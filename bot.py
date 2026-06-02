@@ -1518,54 +1518,35 @@ admin@company.com
 
 def _keep_alive():
     import time
-    # انتظر حتى يبدأ Flask أولاً
-    time.sleep(15)
-    render_url = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
-    if not render_url:
-        print('[keep-alive] RENDER_EXTERNAL_URL غير موجود — ping معطّل')
+    url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    if not url:
         return
-    print(f'[keep-alive] سيُرسل ping إلى {render_url} كل 10 دقائق')
     while True:
         try:
-            r = requests.get(render_url + '/health', timeout=15)
-            print(f'[keep-alive] ping OK ({r.status_code})')
+            requests.get(url, timeout=10)
+            print('[keep-alive] ping OK')
         except Exception as e:
             print(f'[keep-alive] ping failed: {e}')
         time.sleep(600)  # كل 10 دقائق
 
 # ─── تشغيل ───────────────────────────────────────────────────────────────────
 
-# التحقق من المتغيرات الضرورية قبل البدء
-if not bot_token:
-    import sys
-    print("❌ خطأ: BOT_TOKEN غير مضبوط في Render Environment")
-    sys.exit(1)
-if not api_token:
-    print("⚠️  تحذير: API_TOKEN غير مضبوط — البحث لن يعمل حتى تضيف التوكن الصحيح من leakosintapi.com")
-
 flask_app = Flask(__name__)
 
-@flask_app.route('/health')
 @flask_app.route('/')
 def health():
-    from datetime import datetime as _dt
-    return f'Bot is running OK | {_dt.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    return 'Bot is running'
 
 init_db()
 migrate_free_searches_gift()
 print("✅ قاعدة البيانات جاهزة")
-print(f"✅ BOT_TOKEN مضبوط ({bot_token[:10]}...)")
-print(f"✅ ADMIN_ID = {ADMIN_ID}")
 
 def run_bot():
-    import time
     while True:
         try:
-            print("🤖 بدء polling للبوت...")
-            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
+            bot.polling(none_stop=True)
         except Exception as e:
-            print(f"⚠️  خطأ في البوت: {e} — إعادة المحاولة خلال 5 ثوانٍ")
-            time.sleep(5)
+            print(f"خطأ في البوت: {e}")
 
 threading.Thread(target=run_bot, daemon=True).start()
 threading.Thread(target=_keep_alive, daemon=True).start()
