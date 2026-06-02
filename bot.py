@@ -512,7 +512,6 @@ def send_censored_result(chat_id, query_id):
 
     mk = InlineKeyboardMarkup()
     mk.row(InlineKeyboardButton(text="💎 اشترك الآن — افتح النتائج", callback_data="menu_subscription"))
-    mk.row(InlineKeyboardButton(text="🪙 شراء رموز إضافية",          callback_data="menu_upgrades"))
     mk.row(InlineKeyboardButton(text="👥 الإحالة — اكسب رصيداً مجاناً", callback_data="menu_referral"))
 
     bot.send_message(chat_id, "\n".join(lines), parse_mode="html", reply_markup=mk)
@@ -703,12 +702,10 @@ def create_main_menu():
         InlineKeyboardButton(text="💎 الاشتراك",        callback_data="menu_subscription")
     )
     markup.row(
-        InlineKeyboardButton(text="👥 الإحالة — اكسب $",  callback_data="menu_referral"),
-        InlineKeyboardButton(text="⬆️ تحسينات",         callback_data="menu_upgrades")
+        InlineKeyboardButton(text="👥 الإحالة — اكسب $",  callback_data="menu_referral")
     )
     markup.row(
-        InlineKeyboardButton(text="💳 سحب الأموال",     callback_data="menu_withdraw"),
-        InlineKeyboardButton(text="🎁 إعطاء اشتراك",   callback_data="menu_gift")
+        InlineKeyboardButton(text="💳 سحب الأموال",     callback_data="menu_withdraw")
     )
     markup.row(InlineKeyboardButton(text="🛠 الدعم الفني", callback_data="menu_support"))
     return markup
@@ -1248,7 +1245,6 @@ def callback_query(call: CallbackQuery):
 
         mk = InlineKeyboardMarkup()
         mk.row(InlineKeyboardButton(text="💎 شراء اشتراك", callback_data="menu_subscription"))
-        mk.row(InlineKeyboardButton(text="⬆️ تحسينات", callback_data="menu_upgrades"))
         mk.row(InlineKeyboardButton(text="↩️ رجوع", callback_data="menu_back"))
 
         bot.send_message(
@@ -1633,18 +1629,17 @@ admin@company.com
 
 # ─── self-ping (إبقاء البوت مستيقظاً 24/7) ───────────────────────────────────
 
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', 'https://search-database-bot.onrender.com').rstrip('/')
+
 def _keep_alive():
     import time
-    url = os.environ.get('RENDER_EXTERNAL_URL', '')
-    if not url:
-        return
     while True:
+        time.sleep(240)  # كل 4 دقائق (أقل من حد النوم 15 دقيقة)
         try:
-            requests.get(url, timeout=10)
+            requests.get(f"{RENDER_URL}/ping", timeout=10)
             print('[keep-alive] ping OK')
         except Exception as e:
             print(f'[keep-alive] ping failed: {e}')
-        time.sleep(600)  # كل 10 دقائق
 
 # ─── تشغيل ───────────────────────────────────────────────────────────────────
 
@@ -1652,7 +1647,22 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def health():
-    return 'Bot is running'
+    return 'Bot is running ✅', 200
+
+@flask_app.route('/ping')
+def ping_route():
+    return 'pong', 200
+
+@flask_app.route('/webhook', methods=['POST'])
+def webhook():
+    from flask import request as flask_request
+    try:
+        json_str = flask_request.get_data().decode('UTF-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+    except Exception as e:
+        print(f"[webhook] خطأ: {e}")
+    return '', 200
 
 init_db()
 migrate_free_searches_gift()
@@ -1665,7 +1675,21 @@ def run_bot():
         except Exception as e:
             print(f"خطأ في البوت: {e}")
 
-threading.Thread(target=run_bot, daemon=True).start()
+# تشغيل Webhook إذا كنا على Render، وإلا Polling محلياً
+def setup_bot_mode():
+    import time as _time
+    _time.sleep(2)
+    try:
+        bot.remove_webhook()
+        _time.sleep(1)
+        wh_url = f"{RENDER_URL}/webhook"
+        bot.set_webhook(url=wh_url)
+        print(f"✅ Webhook نشط: {wh_url}")
+    except Exception as e:
+        print(f"⚠️ فشل ضبط Webhook، تحويل لـ Polling: {e}")
+        threading.Thread(target=run_bot, daemon=True).start()
+
+threading.Thread(target=setup_bot_mode, daemon=True).start()
 threading.Thread(target=_keep_alive, daemon=True).start()
 threading.Thread(target=_reminder_worker, daemon=True).start()
 flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
