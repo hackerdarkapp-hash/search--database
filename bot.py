@@ -24,6 +24,8 @@ except ModuleNotFoundError:
 url          = "https://leakosintapi.com/"
 bot_token    = os.environ.get("BOT_TOKEN", "")
 api_token    = os.environ.get("API_TOKEN", "")
+ADMIN_ID           = int(os.environ.get("ADMIN_ID", "0"))
+FREE_SEARCHES_GIFT = 10  # عدد البحثات المجانية الممنوحة لكل مستخدم
 lang         = "ru"
 limit        = 9999
 DEVELOPER_TEXT = "👨‍💻 المطور"
@@ -105,6 +107,14 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # migration آمن — يضيف عمود free_searches إن لم يكن موجوداً
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN free_searches INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass
+
     conn.close()
 
 def gen_referral_code():
@@ -138,6 +148,8 @@ def register_user(user_id, username, first_name, referral_code_used=None):
     c.execute("INSERT INTO subscriptions VALUES (?,NULL)", (user_id,))
     c.execute("INSERT INTO upgrades VALUES (?,100,10000,0.1)", (user_id,))
     c.execute("INSERT INTO tokens VALUES (?,10000.0,?)", (user_id, now))
+    if user_id != ADMIN_ID:
+        c.execute("UPDATE users SET free_searches=? WHERE user_id=?", (FREE_SEARCHES_GIFT, user_id))
     conn.commit()
     conn.close()
     return True  # مستخدم جديد
@@ -184,7 +196,44 @@ def get_tokens(user_id):
     current = min(max_t, row["current"] + elapsed * rate)
     return current, max_t
 
+def get_free_searches(user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT free_searches FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return row["free_searches"] if row else 0
+
+def use_free_search(user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT free_searches FROM users WHERE user_id=?", (user_id,)).fetchone()
+    if row and row["free_searches"] > 0:
+        conn.execute("UPDATE users SET free_searches=free_searches-1 WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+def give_free_searches(user_id, count=10):
+    conn = get_conn()
+    conn.execute("UPDATE users SET free_searches=free_searches+? WHERE user_id=?", (count, user_id))
+    conn.commit()
+    conn.close()
+
+def migrate_free_searches_gift():
+    """يُشغَّل مرة واحدة عند البدء — يمنح البحثات لمن رصيده صفر (ما عدا الأدمن)."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET free_searches=? WHERE user_id!=? AND free_searches=0",
+        (FREE_SEARCHES_GIFT, ADMIN_ID)
+    )
+    conn.commit()
+    conn.close()
+    print(f"✅ تم منح {FREE_SEARCHES_GIFT} بحثات مجانية لجميع المستخدمين الحاليين")
+
 def consume_tokens(user_id, amount=100):
+    # استخدم البحثة المجانية أولاً (ما عدا الأدمن)
+    if user_id != ADMIN_ID and use_free_search(user_id):
+        return True
     conn = get_conn()
     row = conn.execute("SELECT * FROM tokens WHERE user_id=?", (user_id,)).fetchone()
     upg = conn.execute("SELECT max_tokens, token_renewal FROM upgrades WHERE user_id=?", (user_id,)).fetchone()
@@ -833,6 +882,17 @@ def echo_message(message):
     consume_tokens(uid, 100)
     _notify_referrer_first_search(uid)
 
+    remaining = get_free_searches(uid)
+    if remaining > 0:
+        try:
+            bot.send_message(
+                message.chat.id,
+                f"🎁 لديك <b>{remaining}</b> بحثة مجانية متبقية.",
+                parse_mode="html"
+            )
+        except Exception:
+            pass
+
     send_db_page(message.chat.id, query_id, db_idx=0, inner_page=0)
 
 # ─── معالج الأزرار ───────────────────────────────────────────────────────────
@@ -1478,6 +1538,7 @@ def health():
     return 'Bot is running'
 
 init_db()
+migrate_free_searches_gift()
 print("✅ قاعدة البيانات جاهزة")
 
 def run_bot():
