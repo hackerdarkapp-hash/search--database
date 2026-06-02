@@ -7,6 +7,7 @@ import html as html_lib
 import string
 import random
 from datetime import datetime, timedelta
+from flask import Flask
 from random import randint
 
 try:
@@ -56,7 +57,16 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_db():
+def 
+# ─── Flask (keep-alive for Render.com) ──────────────────────────────────────
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health():
+    return '✅ البوت يعمل'
+
+init_db():
     conn = get_conn()
     c = conn.cursor()
     c.executescript("""
@@ -1234,8 +1244,12 @@ def callback_query(call: CallbackQuery):
 init_db()
 print("✅ قاعدة البيانات جاهزة")
 
-while True:
-    try:
-        bot.polling(none_stop=True)
-    except Exception as e:
-        print(f"خطأ: {e}")
+def run_bot():
+    while True:
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            print(f"خطأ في البوت: {e}")
+
+threading.Thread(target=run_bot, daemon=True).start()
+flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
