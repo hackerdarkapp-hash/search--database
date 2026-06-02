@@ -1537,11 +1537,11 @@ def _keep_alive():
 
 # التحقق من المتغيرات الضرورية قبل البدء
 if not bot_token:
-      import sys
-      print("❌ خطأ: BOT_TOKEN غير مضبوط في Render Environment")
-      sys.exit(1)
-  if not api_token:
-      print("⚠️  تحذير: API_TOKEN غير مضبوط — البحث لن يعمل حتى تضيف التوكن الصحيح من leakosintapi.com")
+    import sys
+    print("❌ خطأ: BOT_TOKEN غير مضبوط في Render Environment")
+    sys.exit(1)
+if not api_token:
+    print("⚠️  تحذير: API_TOKEN غير مضبوط — البحث لن يعمل حتى تضيف التوكن الصحيح من leakosintapi.com")
 
 flask_app = Flask(__name__)
 
