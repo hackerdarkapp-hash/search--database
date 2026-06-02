@@ -30,7 +30,7 @@ DEVELOPER_URL  = "https://t.me/OX_U1"
 PAGE_SIZE      = 3000
 API_TIMEOUT    = 90
 DB_BTNS_PER_PAGE = 9
-DB_PATH        = "/home/runner/workspace/bot_data.db"
+DB_PATH        = os.environ.get("DB_PATH", "bot_data.db")
 
 # تكاليف الاشتراك (بالدولار)
 SUB_PLANS = [
