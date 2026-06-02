@@ -11,7 +11,4 @@ services:
         sync: false
       - key: API_TOKEN
         sync: false
-      - key: ADMIN_ID
-        sync: false
-      - key: DB_PATH
-        value: /opt/render/project/src/bot_data.db
+
