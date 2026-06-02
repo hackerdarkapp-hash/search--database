@@ -329,6 +329,11 @@ def apply_upgrade(user_id, upg_key):
 
 cash_data = {}
 
+# bulk_data[str(bulk_id)] = {
+#   "items": [{"query": str, "query_id": int, "found": bool, "count": int}, ...]
+# }
+bulk_data = {}
+
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 def build_db_text(database_name, db_data):
@@ -564,6 +569,27 @@ def withdraw_keyboard():
     markup.row(InlineKeyboardButton(text="↩️ رجوع", callback_data="menu_back"))
     return markup
 
+def bulk_summary_keyboard(bulk_id, items):
+    """
+    أزرار ملخص البحث الجماعي — زر لكل استعلام + زر تحميل الكل.
+    items = [{"query": str, "query_id": int, "found": bool, "count": int}, ...]
+    """
+    markup = InlineKeyboardMarkup()
+    for i, item in enumerate(items):
+        icon  = "✅" if item["found"] else "❌"
+        short = item["query"][:22] + "…" if len(item["query"]) > 22 else item["query"]
+        cnt   = f" ({item['count']})" if item["found"] else ""
+        markup.row(InlineKeyboardButton(
+            text=f"{icon} {short}{cnt}",
+            callback_data=f"/bulk_view {bulk_id} {i}"
+        ))
+    markup.row(InlineKeyboardButton(
+        text="📥 تحميل الكل HTML",
+        callback_data=f"/bulk_dl {bulk_id}"
+    ))
+    markup.row(InlineKeyboardButton(text="↩️ القائمة الرئيسية", callback_data="menu_back"))
+    return markup
+
 # ─── إرسال الصفحات ───────────────────────────────────────────────────────────
 
 def send_db_page(chat_id, query_id, db_idx, inner_page, btn_page=0, edit_msg_id=None):
@@ -647,6 +673,117 @@ def send_welcome(message):
 
 # ─── رسائل البحث ─────────────────────────────────────────────────────────────
 
+def _notify_referrer_first_search(uid):
+    """إشعار المُحيل عند أول بحث."""
+    referrer_id = mark_first_search(uid)
+    if referrer_id:
+        bal = get_balance(referrer_id)
+        try:
+            bot.send_message(
+                referrer_id,
+                f"🏧 <b>إحالتك أجرت أول بحث!</b>\n"
+                f"💎 لقد تلقيت <b>0.1$</b> بونص.\n"
+                f"💲 رصيد البونص الآن: {bal['bonus']:.2f}$",
+                parse_mode="html"
+            )
+        except Exception:
+            pass
+
+def handle_bulk_search(message, uid, queries):
+    """
+    بحث جماعي: queries = قائمة نصوص (سطر واحد لكل استعلام).
+    يبحث عن كل استعلام ويعرض ملخصاً تفاعلياً.
+    """
+    n = len(queries)
+    cost = 100 * n  # رمز واحد لكل استعلام
+    current_tokens, max_tokens = get_tokens(uid)
+    if current_tokens < cost:
+        upg = get_upgrades(uid)
+        bot.reply_to(
+            message,
+            f"⚠️ رصيد الرموز غير كافٍ للبحث الجماعي!\n"
+            f"🪙 تحتاج: <b>{cost}</b> رمز  —  لديك: <b>{int(current_tokens)}</b>\n"
+            f"❤ معدل التجديد: {upg['token_renewal']:.1f}/ث",
+            parse_mode="html",
+            reply_markup=create_main_menu()
+        )
+        return
+
+    status_msg = bot.send_message(
+        message.chat.id,
+        f"📝 <b>البحث الجماعي</b> — {n} استعلام\n"
+        f"⏳ جاري البحث... (0/{n})",
+        parse_mode="html"
+    )
+
+    bulk_id = randint(0, 9999999)
+    items   = []
+
+    for i, q in enumerate(queries):
+        # تحديث رسالة التقدم
+        try:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                text=f"📝 <b>البحث الجماعي</b> — {n} استعلام\n"
+                     f"⏳ جاري البحث... ({i}/{n})\n"
+                     f"🔍 <code>{html_lib.escape(q)}</code>",
+                parse_mode="html"
+            )
+        except Exception:
+            pass
+
+        q_id = randint(0, 9999999)
+        ok   = generate_report(q, q_id)
+        consume_tokens(uid, 100)
+
+        found = False
+        count = 0
+        if ok:
+            entry = cash_data.get(str(q_id), {})
+            if entry.get("db_names") and entry["db_names"] != ["no_results"]:
+                found = True
+                count = sum(
+                    len(cash_data[str(q_id)]["raw"].get(db, {}).get("Data", []))
+                    for db in entry["db_names"]
+                )
+
+        items.append({"query": q, "query_id": q_id, "found": found, "count": count})
+
+    bulk_data[str(bulk_id)] = {"items": items}
+
+    # إشعار المُحيل عند أول بحث
+    _notify_referrer_first_search(uid)
+
+    # تلخيص النتائج
+    found_count = sum(1 for it in items if it["found"])
+    total_recs  = sum(it["count"] for it in items)
+
+    try:
+        bot.delete_message(message.chat.id, status_msg.message_id)
+    except Exception:
+        pass
+
+    summary_lines = [
+        f"📝 <b>نتائج البحث الجماعي</b>",
+        f"🔢 الاستعلامات: <b>{n}</b>  —  وُجدت نتائج في: <b>{found_count}</b>",
+        f"📊 إجمالي السجلات: <b>{total_recs}</b>",
+        "─────────────────"
+    ]
+    for it in items:
+        icon = "✅" if it["found"] else "❌"
+        short = it["query"][:35] + "…" if len(it["query"]) > 35 else it["query"]
+        summary_lines.append(f"{icon} <code>{html_lib.escape(short)}</code>"
+                             + (f" — {it['count']} نتيجة" if it["found"] else ""))
+
+    bot.send_message(
+        message.chat.id,
+        "\n".join(summary_lines),
+        parse_mode="html",
+        reply_markup=bulk_summary_keyboard(bulk_id, items)
+    )
+
+
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith("/"))
 def echo_message(message):
     uid = message.from_user.id
@@ -654,7 +791,13 @@ def echo_message(message):
     # تسجيل تلقائي عند الحاجة
     register_user(uid, message.from_user.username or "", message.from_user.first_name or "")
 
-    # التحقق من الرموز
+    # كشف الأسطر المتعددة → بحث جماعي
+    queries = [line.strip() for line in message.text.split("\n") if line.strip()]
+    if len(queries) >= 2:
+        handle_bulk_search(message, uid, queries)
+        return
+
+    # ─── بحث عادي ───────────────────────────────────────────────────────────
     current_tokens, max_tokens = get_tokens(uid)
     if current_tokens < 100:
         upg = get_upgrades(uid)
@@ -682,23 +825,8 @@ def echo_message(message):
         bot.reply_to(message, "⚠️ حدث خطأ أثناء البحث. تحقق من صحة الطلب أو حاول لاحقاً.")
         return
 
-    # اقتطع الرموز وسجّل أول بحث
     consume_tokens(uid, 100)
-    referrer_id = mark_first_search(uid)
-
-    # إشعار المُحيل عند أول بحث (0.1$ بونص)
-    if referrer_id:
-        bal = get_balance(referrer_id)
-        try:
-            bot.send_message(
-                referrer_id,
-                f"🏧 <b>إحالتك أجرت أول بحث!</b>\n"
-                f"💎 لقد تلقيت <b>0.1$</b> بونص.\n"
-                f"💲 رصيد البونص الآن: {bal['bonus']:.2f}$",
-                parse_mode="html"
-            )
-        except Exception:
-            pass
+    _notify_referrer_first_search(uid)
 
     send_db_page(message.chat.id, query_id, db_idx=0, inner_page=0)
 
@@ -1000,7 +1128,102 @@ def callback_query(call: CallbackQuery):
                 reply_markup=create_main_menu()
             )
 
-    elif data in ("menu_api", "menu_bulk_search", "menu_db_list", "menu_faq", "menu_gift"):
+    # ─── عرض نتيجة واحدة من البحث الجماعي ─────────────────────────────────────
+
+    elif data.startswith("/bulk_view "):
+        parts     = data.split(" ")
+        bulk_id   = parts[1]
+        item_idx  = int(parts[2])
+        bot.answer_callback_query(call.id)
+        bentry = bulk_data.get(str(bulk_id))
+        if not bentry:
+            bot.send_message(call.message.chat.id, "⏰ انتهت صلاحية النتائج.")
+            return
+        item = bentry["items"][item_idx]
+        if not item["found"]:
+            bot.send_message(call.message.chat.id,
+                             f"❌ لا توجد نتائج للاستعلام:\n<code>{html_lib.escape(item['query'])}</code>",
+                             parse_mode="html")
+            return
+        send_db_page(call.message.chat.id, item["query_id"], db_idx=0, inner_page=0)
+
+    # ─── تحميل كل نتائج البحث الجماعي دفعة واحدة ────────────────────────────
+
+    elif data.startswith("/bulk_dl "):
+        bulk_id = data.split(" ")[1]
+        bentry  = bulk_data.get(str(bulk_id))
+        if not bentry:
+            bot.answer_callback_query(call.id, "انتهت صلاحية النتائج")
+            return
+        bot.answer_callback_query(call.id, "⏳ جاري إنشاء الملف الجماعي...")
+        chat_id = call.message.chat.id
+        items_snap = bentry["items"]
+
+        def _send_bulk_html():
+            tmp_path = None
+            try:
+                combined_raw  = {}
+                combined_query = " | ".join(it["query"] for it in items_snap)
+                for it in items_snap:
+                    if not it["found"]:
+                        continue
+                    c_entry = cash_data.get(str(it["query_id"]))
+                    if not c_entry or not c_entry.get("raw"):
+                        continue
+                    prefix = it["query"][:20]
+                    for db_name, db_data in c_entry["raw"].items():
+                        key = f"[{prefix}] {db_name}"
+                        combined_raw[key] = db_data
+                if not combined_raw:
+                    bot.send_message(chat_id, "⚠️ لا توجد نتائج للتحميل.")
+                    return
+                html_content = generate_html(combined_query, combined_raw)
+                with tempfile.NamedTemporaryFile(suffix=".html", delete=False,
+                                                 mode="w", encoding="utf-8") as f:
+                    f.write(html_content)
+                    tmp_path = f.name
+                with open(tmp_path, "rb") as f:
+                    bot.send_document(
+                        chat_id, f,
+                        caption=f"📥 <b>نتائج البحث الجماعي</b>\n{len(items_snap)} استعلام",
+                        parse_mode="html",
+                        visible_file_name=f"bulk_{bulk_id}.html",
+                        timeout=300
+                    )
+            except Exception as e:
+                print(f"خطأ في bulk_dl: {e}")
+                try:
+                    bot.send_message(chat_id, "⚠️ حدث خطأ أثناء إنشاء الملف.")
+                except Exception:
+                    pass
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        threading.Thread(target=_send_bulk_html, daemon=True).start()
+
+    # ─── زر البحث الجماعي — تعليمات ─────────────────────────────────────────
+
+    elif data == "menu_bulk_search":
+        bot.answer_callback_query(call.id)
+        mk = InlineKeyboardMarkup()
+        mk.row(InlineKeyboardButton(text="↩️ رجوع", callback_data="menu_back"))
+        bot.send_message(
+            call.message.chat.id,
+            "📝 <b>البحث الجماعي</b>\n\n"
+            "أرسل عدة استعلامات مفصولة بأسطر جديدة، مثال:\n\n"
+            "<code>احمد علي\n"
+            "+967772772772\n"
+            "اليمن</code>\n\n"
+            "📌 كل سطر = بحث مستقل\n"
+            "🪙 التكلفة: 100 رمز لكل استعلام\n"
+            "✅ ستظهر نتائج كل استعلام في زر منفصل\n"
+            "📥 يمكنك تحميل جميع النتائج كملف HTML واحد",
+            parse_mode="html",
+            reply_markup=mk
+        )
+
+    elif data in ("menu_api", "menu_db_list", "menu_faq", "menu_gift"):
         bot.answer_callback_query(call.id, "🔧 هذه الميزة قيد التطوير")
 
     else:
