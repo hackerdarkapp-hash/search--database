@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: search-database-bot
     env: python
     region: frankfurt
