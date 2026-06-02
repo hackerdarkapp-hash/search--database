@@ -1230,6 +1230,22 @@ def callback_query(call: CallbackQuery):
     else:
         bot.answer_callback_query(call.id)
 
+
+# ─── self-ping (إبقاء البوت مستيقظاً 24/7) ───────────────────────────────────
+
+def _keep_alive():
+    import time
+    url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    if not url:
+        return
+    while True:
+        try:
+            requests.get(url, timeout=10)
+            print('[keep-alive] ping OK')
+        except Exception as e:
+            print(f'[keep-alive] ping failed: {e}')
+        time.sleep(600)  # كل 10 دقائق
+
 # ─── تشغيل ───────────────────────────────────────────────────────────────────
 
 flask_app = Flask(__name__)
@@ -1249,4 +1265,5 @@ def run_bot():
             print(f"خطأ في البوت: {e}")
 
 threading.Thread(target=run_bot, daemon=True).start()
+threading.Thread(target=_keep_alive, daemon=True).start()
 flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
