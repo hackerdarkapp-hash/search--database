@@ -105,6 +105,12 @@ def init_db():
             type        TEXT,
             created_at  TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS reminders (
+            user_id    INTEGER PRIMARY KEY,
+            remind_at  TEXT,
+            sent       INTEGER DEFAULT 0
+        );
     """)
     conn.commit()
 
@@ -116,6 +122,67 @@ def init_db():
         pass
 
     conn.close()
+
+
+def schedule_reminder(user_id):
+    """جدوِل تذكيراً بعد 24 ساعة إذا لم يكن هناك تذكير معلّق بالفعل."""
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT remind_at, sent FROM reminders WHERE user_id=?", (user_id,)
+    ).fetchone()
+    remind_at = (datetime.now() + timedelta(hours=24)).isoformat()
+    if not existing:
+        conn.execute(
+            "INSERT INTO reminders (user_id, remind_at, sent) VALUES (?,?,0)",
+            (user_id, remind_at)
+        )
+    elif existing["sent"] == 1:
+        # أعد الجدولة بعد إرسال السابق
+        conn.execute(
+            "UPDATE reminders SET remind_at=?, sent=0 WHERE user_id=?",
+            (remind_at, user_id)
+        )
+    conn.commit()
+    conn.close()
+
+
+def _reminder_worker():
+    """خيط خلفية يُرسل تذكيرات كل ساعة."""
+    import time
+    while True:
+        time.sleep(3600)
+        try:
+            now = datetime.now().isoformat()
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT user_id FROM reminders WHERE sent=0 AND remind_at<=?", (now,)
+            ).fetchall()
+            ids = [r["user_id"] for r in rows]
+            if ids:
+                conn.execute(
+                    f"UPDATE reminders SET sent=1 WHERE user_id IN ({','.join('?'*len(ids))})",
+                    ids
+                )
+                conn.commit()
+            conn.close()
+
+            for uid in ids:
+                try:
+                    mk = InlineKeyboardMarkup()
+                    mk.row(InlineKeyboardButton(text="💎 اشترك الآن", callback_data="menu_subscription"))
+                    mk.row(InlineKeyboardButton(text="👥 ادعُ أصدقاءك — اكسب رصيداً", callback_data="menu_referral"))
+                    bot.send_message(
+                        uid,
+                        "👋 <b>مرحباً! لا تزال نتائج بحثك بانتظارك.</b>\n\n"
+                        "🔒 لقد رأيت معاينة مشفرة سابقاً — النتائج الكاملة لا تزال متاحة!\n\n"
+                        "💎 اشترك الآن أو ادعُ أصدقاءك لكسب رصيد مجاني وفتح النتائج.",
+                        parse_mode="html",
+                        reply_markup=mk
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"خطأ في _reminder_worker: {e}")
 
 def gen_referral_code():
     chars = string.ascii_uppercase + string.digits
@@ -142,7 +209,7 @@ def register_user(user_id, username, first_name, referral_code_used=None):
             referred_by = row["user_id"]
 
     now = datetime.now().isoformat()
-    c.execute("INSERT INTO users VALUES (?,?,?,?,?,?,0)",
+    c.execute("INSERT INTO users (user_id, username, first_name, referral_code, referred_by, joined_at, has_searched, free_searches) VALUES (?,?,?,?,?,?,0,0)",
               (user_id, username, first_name, code, referred_by, now))
     c.execute("INSERT INTO balances VALUES (?,0.0,0.0)", (user_id,))
     c.execute("INSERT INTO subscriptions VALUES (?,NULL)", (user_id,))
@@ -399,6 +466,58 @@ def build_db_text(database_name, db_data):
             lines.append("")
     return "\n".join(lines).strip()
 
+def censor_value(val):
+    s = str(val)
+    length = max(8, len(s))
+    return "█" * length
+
+def send_censored_result(chat_id, query_id):
+    entry = cash_data.get(str(query_id), {})
+    db_names = entry.get("db_names", [])
+    raw      = entry.get("raw", {})
+
+    if not db_names or db_names == ["no_results"]:
+        bot.send_message(chat_id, "🔍 لم يتم العثور على نتائج لهذا الطلب.")
+        return
+
+    total_records = sum(len(raw.get(db, {}).get("Data", [])) for db in db_names)
+    total_dbs     = len(db_names)
+
+    lines = [
+        f"🔒 <b>تم العثور على {total_records} نتيجة في {total_dbs} قاعدة بيانات!</b>",
+        f"",
+        f"👇 <b>معاينة مشفرة — اشترك لرؤية البيانات كاملة:</b>",
+        "─────────────────",
+    ]
+
+    for db_name in db_names[:3]:
+        db_data = raw.get(db_name, {})
+        lines.append(f"\n<b>📂 {db_name}</b>")
+        info = db_data.get("InfoLeak", "")
+        if info:
+            lines.append(info)
+        records = db_data.get("Data", [])
+        for record in records[:2]:
+            lines.append("")
+            for col, val in record.items():
+                lines.append(f"<b>{col}</b>: {censor_value(val)}")
+        if len(records) > 2:
+            lines.append(f"<i>... و {len(records) - 2} سجل آخر مخفي</i>")
+
+    if total_dbs > 3:
+        lines.append(f"\n<i>... و {total_dbs - 3} قاعدة بيانات أخرى مخفية</i>")
+
+    lines.append("\n─────────────────")
+    lines.append("🔓 <b>اشترك الآن لفتح جميع النتائج كاملة وغير مشفرة!</b>")
+
+    mk = InlineKeyboardMarkup()
+    mk.row(InlineKeyboardButton(text="💎 اشترك الآن — افتح النتائج", callback_data="menu_subscription"))
+    mk.row(InlineKeyboardButton(text="🪙 شراء رموز إضافية",          callback_data="menu_upgrades"))
+    mk.row(InlineKeyboardButton(text="👥 الإحالة — اكسب رصيداً مجاناً", callback_data="menu_referral"))
+
+    bot.send_message(chat_id, "\n".join(lines), parse_mode="html", reply_markup=mk)
+    schedule_reminder(chat_id)
+
 def split_into_pages(text, page_size=PAGE_SIZE):
     if len(text) <= page_size:
         return [text]
@@ -584,7 +703,7 @@ def create_main_menu():
         InlineKeyboardButton(text="💎 الاشتراك",        callback_data="menu_subscription")
     )
     markup.row(
-        InlineKeyboardButton(text="👥 نظام الإحالة",    callback_data="menu_referral"),
+        InlineKeyboardButton(text="👥 الإحالة — اكسب $",  callback_data="menu_referral"),
         InlineKeyboardButton(text="⬆️ تحسينات",         callback_data="menu_upgrades")
     )
     markup.row(
@@ -853,17 +972,7 @@ def echo_message(message):
 
     # ─── بحث عادي ───────────────────────────────────────────────────────────
     current_tokens, max_tokens = get_tokens(uid)
-    if current_tokens < 100:
-        upg = get_upgrades(uid)
-        bot.reply_to(
-            message,
-            f"⚠️ رصيد الرموز غير كافٍ!\n"
-            f"🪙 رصيدك الحالي: {int(current_tokens)} / {max_tokens}\n"
-            f"❤ معدل التجديد: {upg['token_renewal']:.1f}/ث\n\n"
-            f"يمكنك شراء رموز إضافية من قائمة التحسينات أو انتظر تجدد الرصيد.",
-            reply_markup=create_main_menu()
-        )
-        return
+    no_tokens = current_tokens < 100
 
     waiting_msg = bot.send_message(message.chat.id,
                                    "🔍 جاري البحث العميق في قواعد البيانات... قد يستغرق بضع ثوانٍ.")
@@ -877,6 +986,10 @@ def echo_message(message):
 
     if not ok:
         bot.reply_to(message, "⚠️ حدث خطأ أثناء البحث. تحقق من صحة الطلب أو حاول لاحقاً.")
+        return
+
+    if no_tokens:
+        send_censored_result(message.chat.id, query_id)
         return
 
     consume_tokens(uid, 100)
@@ -1268,16 +1381,20 @@ def callback_query(call: CallbackQuery):
 
         bot.send_message(
             call.message.chat.id,
-            f"👥 <b>نظام الإحالة</b>\n\n"
-            f"✉ رابط الإحالة الخاص بك:\n"
+            f"👥 <b>نظام الإحالة — اكسب دولارات حقيقية!</b>\n\n"
+            f"🔗 رابط الإحالة الخاص بك:\n"
             f"<code>{ref_link}</code>\n\n"
-            f"🧍 أي شخص يدخل البوت لأول مرة عبر رابطك يصبح إحالتك إلى الأبد.\n\n"
-            f"💰 ستتلقى <b>20%</b> من جميع مدفوعات إحالاتك.\n"
-            f"💸 ستتلقى <b>5%</b> من مدفوعات إحالات إحالاتك.\n"
-            f"💵 <b>0.1$</b> بونص عن كل مستخدم يجري أول بحث.\n\n"
+            f"📌 <b>كيف يعمل؟</b>\n"
+            f"شارك رابطك مع أصدقائك — كل من يسجل عبر رابطك يصبح إحالتك <b>للأبد</b>.\n\n"
+            f"💵 <b>ماذا تكسب؟</b>\n"
+            f"• <b>20%</b> من كل مدفوعات إحالاتك المباشرة\n"
+            f"• <b>5%</b> من مدفوعات إحالات إحالاتك\n"
+            f"• <b>0.1$</b> بونص فوري عند أول بحث لكل مُحال\n\n"
+            f"🏧 <b>السحب متاح!</b>\n"
+            f"الأرباح تُضاف لرصيدك تلقائياً ويمكنك سحبها من قسم 💳 سحب الأموال.\n\n"
             f"─────────────────\n"
-            f"💠 إجمالي الإحالات: <b>{total_refs}</b>\n"
-            f"✅ بحثوا بالفعل: <b>{searched_refs}</b>\n"
+            f"💠 إجمالي إحالاتك: <b>{total_refs}</b>\n"
+            f"✅ أجروا بحثاً: <b>{searched_refs}</b>\n"
             f"💲 رصيد البونص: <b>{bal['bonus']:.2f}$</b>\n"
             f"💳 قابل للسحب: <b>{bal['withdrawable']:.2f}$</b>",
             parse_mode="html",
@@ -1550,4 +1667,5 @@ def run_bot():
 
 threading.Thread(target=run_bot, daemon=True).start()
 threading.Thread(target=_keep_alive, daemon=True).start()
+threading.Thread(target=_reminder_worker, daemon=True).start()
 flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
