@@ -519,6 +519,10 @@ def create_result_keyboard(query_id, db_idx, inner_page, db_names, db_pages, btn
 def create_main_menu():
     markup = InlineKeyboardMarkup()
     markup.row(
+        InlineKeyboardButton(text="🔍 ما يمكنني البحث عنه", callback_data="menu_search_guide"),
+        InlineKeyboardButton(text="👤 حسابي",               callback_data="menu_my_account")
+    )
+    markup.row(
         InlineKeyboardButton(text="⚙️ API",             callback_data="menu_api"),
         InlineKeyboardButton(text="📝 البحث الجماعي",   callback_data="menu_bulk_search")
     )
@@ -915,6 +919,134 @@ def callback_query(call: CallbackQuery):
             bot.send_message(call.message.chat.id,
                              "🕵️ يمكنني البحث عن كل شيء تقريباً. فقط أرسل لي طلبك.",
                              reply_markup=create_main_menu())
+
+
+    # ─── ما يمكنني البحث عنه ────────────────────────────────────────────────
+
+    elif data == "menu_search_guide":
+        bot.answer_callback_query(call.id)
+        mk = InlineKeyboardMarkup()
+        mk.row(InlineKeyboardButton(text="↩️ رجوع", callback_data="menu_back"))
+        bot.send_message(
+            call.message.chat.id,
+            """يمكنك البحث عن البيانات التالية:
+
+📧ابحث عن طريق البريد
+├ example@gmail.com - ابحث عن البريد
+├ example@ - البحث دون أخذ النطاق في الاعتبار
+└ @gmail.com - ابحث عن مجالات معينة.
+
+👤ابحث بالاسم أو نيك
+├ بتروف
+├ بتروف ماكسيد
+├ بتروف سيرجيفيتش
+├ ماكسيم سيرجيفيتش
+├ بتروف مكسيم سيرجيفيتش
+└ ShadowPlayer228
+
+📱البحث عن طريق رقم الهاتف
+├ +79002206090
+├ 79002206090
+└ 89002206090
+
+🔑البحث عن كلمة المرور
+└ 123qwe
+
+🚗البحث بالسيارة
+├ O999МУ777 - ابحث عن السيارات في الاتحاد الروسي
+├ ВО4561АХ - ابحث عن السيارات من قبل القانون الجنائي
+└ XTA21150053965897 - البحث بواسطة فين
+
+✈ابحث عن حساب Telegram
+├ Petrov Ivan - البحث بالاسم واللقب
+├ 314159265 - البحث عن طريق حساب المعرف
+└ Petivan - البحث عن طريق اسم المستخدم
+
+📘ابحث عن حساب Facebook
+├ Petrov Ivan - البحث بالاسم
+└ 314159265 - البحث عن طريق حساب المعرف
+
+🌟ابحث عن حساب Vkontakte
+├ Petrov Ivan - البحث بالاسم واللقب
+└ 314159265 - البحث عن طريق حساب المعرف
+
+📸ابحث عن حساب Instagram
+├ Petrov Ivan - البحث بالاسم واللقب
+└ 314159265 - البحث عن طريق حساب المعرف
+
+📍البحث عن طريق IP
+└ 127.0.0.1
+
+📃البحث الجماعي من خلال الملف. الترميز UTF-8. طلب واحد على كل سطر.
+
+
+يتم دعم الطلبات المركبة في أي تنسيقات:
+├ بتروف 79002206090
+├ ماكسيم سيرجيفيتش 127.0.0.1
+├ بتروف مكسيم سيرجيفيتش 02/16/1995
+├ ShadowPlayer228 example@gmail.com
+├ ماكسيم سيرجيفيتش موسكو
+├ example@gmail.com 123qwe
+└ ShadowPlayer228 16.08.1994
+
+
+يمكنك أيضًا البحث عن البيانات في وقت واحد بواسطة عدة طلبات. للقيام بذلك ، حدد كل طلب على خط منفصل ويتم تنفيذه في وقت واحد.""",
+            reply_markup=mk
+        )
+
+    # ─── حسابي ──────────────────────────────────────────────────────────────
+
+    elif data == "menu_my_account":
+        bot.answer_callback_query(call.id)
+        user_data = get_user(uid)
+        if not user_data:
+            register_user(uid, "", "")
+            user_data = get_user(uid)
+        bal                       = get_balance(uid)
+        upg                       = get_upgrades(uid)
+        cur_t, max_t              = get_tokens(uid)
+        total_refs, searched_refs = get_referral_stats(uid)
+        conn_acc = get_conn()
+        sub_row = conn_acc.execute(
+            "SELECT expires_at FROM subscriptions WHERE user_id=?", (uid,)
+        ).fetchone()
+        conn_acc.close()
+        now = datetime.now()
+        if sub_row and sub_row["expires_at"]:
+            exp = datetime.fromisoformat(sub_row["expires_at"])
+            if exp > now:
+                delta      = exp - now
+                sub_time   = f"{delta.days} أيام {delta.seconds // 3600} ساعات"
+                sub_expire = exp.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                sub_time, sub_expire = "❌ منتهي", "—"
+        else:
+            sub_time, sub_expire = "❌ لا يوجد اشتراك", "—"
+        uname    = f"@{user_data['username']}" if user_data.get("username") else "—"
+        fname    = user_data.get("first_name", "—")
+        joined   = user_data.get("joined_at", "—")
+        mk2 = InlineKeyboardMarkup()
+        mk2.row(InlineKeyboardButton(text="💎 الاشتراك", callback_data="menu_subscription"))
+        mk2.row(InlineKeyboardButton(text="↩️ رجوع",     callback_data="menu_back"))
+        bot.send_message(
+            call.message.chat.id,
+            (
+                f"🆔 ID: {uid}\n"
+                f"👤 اسم: {fname}\n"
+                f"👤 كنية: {uname}\n"
+                f"💎 وقت الاشتراك: {sub_time}\n"
+                f"⌛ سينتهي الاشتراك: {sub_expire}\n"
+                f"🪙 الرموز: {int(cur_t):,} / {max_t:,}\n"
+                f"❤️ تجديد الرمز المميز: {upg['token_renewal']:.1f} في الثانية\n"
+                f"🚧 عمق البحث: {upg['search_depth']}\n"
+                f"💵 توازن: {bal['withdrawable'] + bal['bonus']:.2f} $\n"
+                f"💳 سبل الانسحاب: {bal['withdrawable']:.2f} $\n"
+                f"👥 الإحالات: {total_refs}\n"
+                f"🪞 مستخدمي الاحالة: {searched_refs}\n"
+                f"📅 تاريخ التسجيل: {joined}"
+            ),
+            reply_markup=mk2
+        )
 
     elif data == "menu_support":
         bot.answer_callback_query(call.id)
