@@ -24,9 +24,10 @@ def user_access_test(user_id):
     return True
 
 cash_reports = {}
+cash_db_names = {}
 
 def generate_report(query, query_id):
-    global cash_reports, url, bot_token, api_token, limit, lang
+    global cash_reports, cash_db_names
     data = {"token": api_token, "request": query.split("\n")[0], "limit": limit, "lang": lang}
     response = requests.post(url, json=data).json()
     print(response)
@@ -34,6 +35,7 @@ def generate_report(query, query_id):
         print("خطأ:" + response["Error code"])
         return None
     cash_reports[str(query_id)] = []
+    cash_db_names[str(query_id)] = []
     for database_name in response["List"].keys():
         text = [f"<b>{database_name}</b>", ""]
         text.append(response["List"][database_name]["InfoLeak"] + "\n")
@@ -46,6 +48,7 @@ def generate_report(query, query_id):
         if len(text) > 3500:
             text = text[:3500] + text[3500:].split("\n")[0] + "\n\nبعض البيانات لا تتناسب مع هذه الرسالة"
         cash_reports[str(query_id)].append(text)
+        cash_db_names[str(query_id)].append(database_name)
     return cash_reports[str(query_id)]
 
 def create_inline_keyboard(query_id, page_id, count_page):
@@ -53,18 +56,35 @@ def create_inline_keyboard(query_id, page_id, count_page):
     markup.row_width = 3
 
     if page_id < 0:
-        page_id = count_page
-    elif page_id > count_page - 1:
+        page_id = count_page + page_id
+    elif page_id >= count_page:
         page_id = page_id % count_page
 
+    # --- أزرار قواعد البيانات ---
+    db_names = cash_db_names.get(str(query_id), [])
+    if db_names and count_page > 1:
+        db_buttons = []
+        for i, db_name in enumerate(db_names):
+            short_name = db_name[:20] + "…" if len(db_name) > 20 else db_name
+            if i == page_id:
+                short_name = f"• {short_name} •"
+            db_buttons.append(
+                InlineKeyboardButton(text=short_name, callback_data=f"/page {query_id} {i}")
+            )
+        # توزيع الأزرار بحد أقصى 3 في كل صف
+        for i in range(0, len(db_buttons), 3):
+            markup.row(*db_buttons[i:i+3])
+
+    # --- أزرار التنقل ---
     if count_page > 1:
-        markup.add(
-            InlineKeyboardButton(text="<<", callback_data=f"/page {query_id} {page_id - 1}"),
-            InlineKeyboardButton(text=f"{page_id + 1}/{count_page}", callback_data="page_list"),
-            InlineKeyboardButton(text=">>", callback_data=f"/page {query_id} {page_id + 1}")
+        markup.row(
+            InlineKeyboardButton(text="◀️", callback_data=f"/page {query_id} {page_id - 1}"),
+            InlineKeyboardButton(text=f"{page_id + 1} / {count_page}", callback_data="page_list"),
+            InlineKeyboardButton(text="▶️", callback_data=f"/page {query_id} {page_id + 1}")
         )
 
-    markup.add(
+    # --- زر المطور (ثابت دائماً) ---
+    markup.row(
         InlineKeyboardButton(text=DEVELOPER_TEXT, url=DEVELOPER_URL)
     )
 
@@ -98,7 +118,9 @@ def echo_message(message):
 def callback_query(call: CallbackQuery):
     global cash_reports
     if call.data.startswith("/page "):
-        query_id, page_id = call.data.split(" ")[1:]
+        parts = call.data.split(" ")
+        query_id = parts[1]
+        page_id = int(parts[2])
         if query_id not in cash_reports:
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
@@ -107,12 +129,17 @@ def callback_query(call: CallbackQuery):
             )
         else:
             report = cash_reports[query_id]
-            markup = create_inline_keyboard(query_id, int(page_id), len(report))
+            count_page = len(report)
+            if page_id < 0:
+                page_id = count_page + page_id
+            elif page_id >= count_page:
+                page_id = page_id % count_page
+            markup = create_inline_keyboard(query_id, page_id, count_page)
             try:
                 bot.edit_message_text(
                     chat_id=call.message.chat.id,
                     message_id=call.message.message_id,
-                    text=report[int(page_id)],
+                    text=report[page_id],
                     parse_mode="html",
                     reply_markup=markup
                 )
@@ -120,7 +147,7 @@ def callback_query(call: CallbackQuery):
                 bot.edit_message_text(
                     chat_id=call.message.chat.id,
                     message_id=call.message.message_id,
-                    text=report[int(page_id)].replace("<b>", "").replace("</b>", ""),
+                    text=report[page_id].replace("<b>", "").replace("</b>", ""),
                     reply_markup=markup
                 )
 
