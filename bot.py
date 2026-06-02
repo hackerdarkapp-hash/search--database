@@ -39,9 +39,11 @@ threading.Thread(target=_start_health, daemon=True).start()
 # ──────────────────────────────────────────────
 #  IntelligenceX API
 # ──────────────────────────────────────────────
-def intelx_search(query: str, max_results: int = 10) -> list:
+def intelx_search(query: str, max_results: int = 10):
+    """Returns (records, error_msg). On success error_msg is None."""
     if not INTELX_KEY:
-        return []
+        return [], '⚠️ مفتاح INTELX_KEY غير موجود في الإعدادات.'
+
     headers = {'x-key': INTELX_KEY, 'Content-Type': 'application/json'}
     body = {
         'term': query, 'buckets': [], 'lookuplevel': 0,
@@ -50,13 +52,22 @@ def intelx_search(query: str, max_results: int = 10) -> list:
         'media': 0, 'terminate': []
     }
     try:
-        r = requests.post(f'{INTELX_BASE}/intelligent/search', json=body, headers=headers, timeout=15)
+        r = requests.post(f'{INTELX_BASE}/intelligent/search',
+                          json=body, headers=headers, timeout=15)
+        if r.status_code == 401:
+            return [], '🔑 مفتاح INTELX_KEY غير صالح أو منتهي الصلاحية.\nتحقق من مفتاحك على intelx.io'
+        if r.status_code == 402:
+            return [], '💳 رصيد IntelligenceX منتهٍ. يرجى تجديد الاشتراك.'
         r.raise_for_status()
         sid = r.json().get('id')
         if not sid:
-            return []
-    except Exception:
-        return []
+            return [], '❌ لم يبدأ البحث — لم يُرجع IntelligenceX معرّف جلسة.'
+    except requests.exceptions.Timeout:
+        return [], '⏱ انتهت مهلة الاتصال بـ IntelligenceX. حاول مجدداً.'
+    except requests.exceptions.ConnectionError:
+        return [], '🌐 تعذّر الاتصال بـ IntelligenceX. تحقق من الإنترنت.'
+    except Exception as e:
+        return [], f'❌ خطأ غير متوقع: {e}'
 
     time.sleep(3)
     try:
@@ -64,9 +75,10 @@ def intelx_search(query: str, max_results: int = 10) -> list:
                           params={'id': sid, 'limit': max_results, 'offset': 0},
                           headers=headers, timeout=15)
         r2.raise_for_status()
-        return r2.json().get('records', [])
-    except Exception:
-        return []
+        records = r2.json().get('records', [])
+        return records, None
+    except Exception as e:
+        return [], f'❌ خطأ عند جلب النتائج: {e}'
 
 
 def fmt_results(records: list, query: str) -> str:
@@ -123,8 +135,11 @@ def cmd_start(msg):
 def handle_search(msg):
     query = msg.text.strip()
     wait  = bot.send_message(msg.chat.id, '⏳ جارٍ البحث في IntelligenceX...')
-    records = intelx_search(query)
-    result  = fmt_results(records, query)
+    records, err = intelx_search(query)
+    if err:
+        result = err
+    else:
+        result = fmt_results(records, query)
     bot.edit_message_text(result, msg.chat.id, wait.message_id,
                           parse_mode='HTML', reply_markup=main_kb())
 
