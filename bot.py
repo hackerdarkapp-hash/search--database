@@ -356,7 +356,7 @@ def credit_referrer(user_id, amount, type_name, from_id):
     conn.close()
 
 def mark_first_search(user_id):
-    """عند أول بحث — أعطِ المُحيل 0.1$ بونص."""
+    """عند أول بحث — أعطِ المُحيل 0.1$ قابل للسحب."""
     conn = get_conn()
     user = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     if not user or user["has_searched"]:
@@ -365,9 +365,9 @@ def mark_first_search(user_id):
     conn.execute("UPDATE users SET has_searched=1 WHERE user_id=?", (user_id,))
     referrer_id = user["referred_by"]
     if referrer_id:
-        conn.execute("UPDATE balances SET bonus=bonus+0.1 WHERE user_id=?", (referrer_id,))
+        conn.execute("UPDATE balances SET withdrawable=withdrawable+0.1 WHERE user_id=?", (referrer_id,))
         conn.execute("INSERT INTO earnings_log (referrer_id, from_id, amount, type, created_at) VALUES (?,?,?,?,?)",
-                     (referrer_id, user_id, 0.1, "first_search_bonus", datetime.now().isoformat()))
+                     (referrer_id, user_id, 0.1, "first_search_referral", datetime.now().isoformat()))
     conn.commit()
     conn.close()
     return referrer_id
@@ -1385,14 +1385,13 @@ def callback_query(call: CallbackQuery):
             f"💵 <b>ماذا تكسب؟</b>\n"
             f"• <b>20%</b> من كل مدفوعات إحالاتك المباشرة\n"
             f"• <b>5%</b> من مدفوعات إحالات إحالاتك\n"
-            f"• <b>0.1$</b> بونص فوري عند أول بحث لكل مُحال\n\n"
+            f"• <b>0.1$</b> فوري قابل للسحب عند أول بحث لكل مُحال\n\n"
             f"🏧 <b>السحب متاح!</b>\n"
-            f"الأرباح تُضاف لرصيدك تلقائياً ويمكنك سحبها من قسم 💳 سحب الأموال.\n\n"
+            f"جميع الأرباح تُضاف لرصيدك القابل للسحب تلقائياً.\n\n"
             f"─────────────────\n"
             f"💠 إجمالي إحالاتك: <b>{total_refs}</b>\n"
             f"✅ أجروا بحثاً: <b>{searched_refs}</b>\n"
-            f"💲 رصيد البونص: <b>{bal['bonus']:.2f}$</b>\n"
-            f"💳 قابل للسحب: <b>{bal['withdrawable']:.2f}$</b>",
+            f"💳 رصيدك القابل للسحب: <b>{bal['withdrawable']:.2f}$</b>",
             parse_mode="html",
             reply_markup=mk
         )
@@ -1406,8 +1405,7 @@ def callback_query(call: CallbackQuery):
             call.message.chat.id,
             f"💳 <b>سحب الأموال</b>\n\n"
             f"💲 رصيدك القابل للسحب: <b>{bal['withdrawable']:.2f}$</b>\n\n"
-            f"📌 الحد الأدنى للسحب: <b>1$</b>\n"
-            f"<i>ملاحظة: البونص (0.1$/مستخدم) لا يمكن سحبه، يُستخدم فقط للاشتراكات.</i>\n\n"
+            f"📌 الحد الأدنى للسحب: <b>1$</b>\n\n"
             f"اختر طريقة السحب:",
             parse_mode="html",
             reply_markup=withdraw_keyboard()
@@ -1693,3 +1691,4 @@ threading.Thread(target=setup_bot_mode, daemon=True).start()
 threading.Thread(target=_keep_alive, daemon=True).start()
 threading.Thread(target=_reminder_worker, daemon=True).start()
 flask_app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+
